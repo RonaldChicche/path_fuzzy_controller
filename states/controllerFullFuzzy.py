@@ -23,8 +23,8 @@ class DHController:
         self.inDRWH_ang['Z'] = fuzz.trimf(self.inDRWH_ang.universe, [-180, 0, 180])
         self.inDRWH_ang['P'] = fuzz.trimf(self.inDRWH_ang.universe, [0, 180, 180])
 
-        self.Dist_m['tfL'] = fuzz.trapmf(self.Dist_m.universe, [-70, -70, -45, -40])
-        self.Dist_m['tfR'] = fuzz.trapmf(self.Dist_m.universe, [40, 45, 70, 70])
+        self.Dist_m['tfL'] = fuzz.trapmf(self.Dist_m.universe, [-70, -70, -10, -5])
+        self.Dist_m['tfR'] = fuzz.trapmf(self.Dist_m.universe, [5, 10, 70, 70])
 
         self.ouDRWH_ang['N'] = fuzz.trimf(self.ouDRWH_ang.universe, [-180, -180, 0])
         self.ouDRWH_ang['TL'] = fuzz.trimf(self.ouDRWH_ang.universe, [-50, -50, -45])

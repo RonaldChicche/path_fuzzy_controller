@@ -1,29 +1,28 @@
 import sys
 import time
 import netpyV2 as net
-from states.auto import Automatic
-from states.manu import Manual
 from state_machine import StateMachine
 from queue import Queue, LifoQueue
 
 
 queue = {
-    "DATA": LifoQueue(),
-    "CONTROL": Queue(),
-    "MISION": Queue()
+    "DATA_ENV": LifoQueue(), # Enviromental variables / Listener -> RuderCtrl-100ms~
+    "DATA_WIND": LifoQueue(), # Sail control variables / SailCtrl -> Listener-realtime~
+    "DATA_CTRL_REPORT": LifoQueue(maxsize=10), # Report ctrl state variables / Auto <- Sail, Rudder
+    "CONTROL": Queue(maxsize=10),
+    "MISION": Queue(maxsize=10)
 }
 
 ports = {
-    "BOARD": net.SerialPort(port='/dev/ttyS0', baudrate=115200),
-    "XBEE": net.SerialPort(port='/dev/ttyUSB0', baudrate=57600)
+    "BOARD_ENV": net.SerialPort(port='/dev/ttyS0', baudrate=115200, name='DATA ENV'), # "DATA" -> Listener  /dev/ttyS0->raw  wire
+    "BOARD_WIND": net.SerialPort(port='/dev/ttyACM0', baudrate=115200, name='DATA WIND'), # Sail and clutch control data
+    #"BOARD_SAIL": net.SerialPort(port='/dev/ttyUSB1', baudrate=115200, name='SAIL ACTUATOR'), # Tester servo
+    #"BOARD_ADD": net.SerialPort(port='/dev/ttyUSB0', baudrate=115200), # Raw aditionnal sensor data 
+    "XBEE": net.SerialPort(port='/dev/ttyUSB0', baudrate=57600, name='XBEE') # "Command"
 }
 
-# states = {
-#     "MANUAL": Manual(queue['DATA'], queue['CONTROL'], ports["BOARD"]),
-#     "AUTOMATIC": Automatic(queue['DATA'], queue['MISION'], ports['BOARD']),
-# }
 
-state_machine = StateMachine("MANUAL", ports=ports, queues=queue)
+state_machine = StateMachine(ports=ports, queues=queue)
 state_machine.start()
 
 if __name__ == '__main__':

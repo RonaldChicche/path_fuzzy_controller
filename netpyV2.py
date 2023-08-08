@@ -12,12 +12,12 @@ class SerialPort(serial.Serial):
         self.trama = ''
     
     def hear(self):
-        if self.is_open:
-            if self.in_waiting > 0:
-                self.trama = self.readline()
-                print(self.trama)
-                return self.trama
-            return None
+        if self.in_waiting > 0:
+            self.trama = self.readline()
+            #print(self.trama)
+            return self.trama
+        return None
+  
     
     def receive_state_variables(self):
         if self.is_open:
@@ -51,4 +51,4 @@ class SerialPort(serial.Serial):
     def close_port(self):
         if self.is_open:
             self.close()
-            print('PORT CLOSED')
+            print('PORT CLOSED ->', self.name)

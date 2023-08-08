@@ -1,108 +1,220 @@
-import threading
 import time 
-from utilities import*
-from states.controllerFullFuzzy import SailController, RudderController, DHController
+import math
+#from utilities import*
+from states.controllerFullFuzzy import RudderController, DHController, SailController
 
 
-class Automatic(threading.Thread):
-    def __init__(self, data_queue, mision_queue, board_port, xbee_port=None):
-        super().__init__()
+# Add mision recorder
+
+class Automatic():
+    def __init__(self, queue, port):
         self.name = 'AUTOMATIC'
         self.done = False
-        self.data_queue = data_queue
-        self.mision_queue = mision_queue
-        self.board_port = board_port
-        self.xbee_port = xbee_port
+        self.data_queue = queue['DATA_ENV']
+        self.mision_queue = queue['MISION']
+        self.xbee_port = port['XBEE']
+        self.board_port = port['BOARD_ENV']
+        # Waypoint charge
+        if not self.mision_queue.empty():
+            self.waypoints = self.mision_queue.get()
+        # First lecture
+        if not self.data_queue.empty():
+            self.data_list = self.data_queue.get()
+            self.pos_partida = (float(self.data_list['lat']), float(self.data_list['lng']))
+            self.posBef = self.pos_partida
         # Inicializar objetos de controladores
         self.desire = DHController()  # por ahora solo controla el bucle
         self.rudder = RudderController()
         self.sail = SailController()
-        self.waypoints = None
+        #self.clutch = ClutchController()
+        # Datos de inicio
+        self.start_time = time.time()
+        self.past_position = (float(self.data_list['lat']), float(self.data_list['lng']))
+        self.current_waypoint = (self.waypoints[0]['lat'], self.waypoints[0]['lng'])
+        self.sail_pos = 0  # Sail initial position
+        self.error_sail = 0
+        self.rudder_pos = 0 # Rudder initial position
+        self.clutch = False
+        self.waypoints_done = []
 
     def run(self):
-        # Waypoint charge
-        if not self.mision_queue.empty():
-            self.waypoints = self.mision_queue.get()
-        # Init algorithm
-        if not self.data_queue.empty():
-            data_list = self.data_queue.get()
+        # Data Reading 
+        new_data_list = self.data_queue.get() # Read from queue 
+        if self.data_list['time'] < new_data_list['time']: # Watch out whether it is new data or not
+            data_list = new_data_list
+            self.data_list = new_data_list
+        else:
+            data_list = self.data_list
+        # Control variables update
+        t = data_list['time']  
+        self.current_position = (float(data_list['lat']), float(data_list['lng']))
+        self.relative_wind = float(data_list['rwd'])
+        self.heading = float(data_list['hdn'])
+        if self.heading > 180:
+            self.heading = self.heading - 360 
         
-        AS = 0  # Posicion inicial
-        P0 = (float(data_list['lat']), float(data_list['lng']))
-        posBef = P0
+        # Desired Heading -------------------------------------------------------------------------------
+        self.desired_heading = angle_to_north(*self.current_position, *self.current_waypoint)
+        self.desvio = distancia_a_recta(self.pos_partida, self.current_waypoint, self.current_position)
+        self.new_desired_heading = self.heading_controller(self.relative_wind, 
+                                                           self.heading, 
+                                                           self.desvio, 
+                                                           self.desired_heading)
+        
+        # Desired Rudder -------------------------------------------------------------------------------
+        self.curse = angle_to_north(*self.past_position, *self.current_position)
+        self.rudder_pos = self.rudder_controller(self.relative_wind, 
+                                             self.new_desired_heading, 
+                                             self.heading, 
+                                             self.curse)
 
-        while not self.done:
-            
-            if not self.data_queue.empty():
-                # Data update - 
-                new_data_list = self.data_queue.get()
-                if data_list['time'] < new_data_list['time']:
-                    data_list = new_data_list
-                t = data_list['time']    
-                waypoint = (self.waypoints[0]['lat'], self.waypoints[0]['lng'])
-                print('->', waypoint)
-                posAct = (float(data_list['lat']), float(data_list['lng']))
-                H = float(data_list['hdn'])
-                RWH = float(data_list['rwd'])
-                if H > 180:
-                    H = H - 360 
-                if RWH > 180:
-                    RWH = RWH - 360 
-                
-                # Desired Heading
-                DHin = angle_to_north(*posAct, *waypoint)
-                WH = RWH + H
-                DRWHin = WH - DHin
-                distancia_P0_W, distancia_Pn_recta = distancia_a_recta(P0, waypoint, posAct)
-                DRWHout = self.desire.compute(RWH, DRWHin, distancia_Pn_recta)
-                DH = WH + DRWHout
-                # Desired Sail
-                errorSail = AS - RWH
-                if errorSail < -180 or errorSail > 180:
-                    errorSail = 360 - errorSail
-                sail_inc = self.sail.compute(RWH, errorSail)
-                AS = AS + sail_inc # update sail angle
-                if AS > 90: 
-                    AS = 90
-                elif AS < -90:
-                    AS = -90
-                # Desired Rudder
-                C = angle_to_north(*posBef, *posAct)
-                DHC = DH - C
-                DHH = DH - H
-                if DHC > 180 or DHC < -180:
-                    DHC = DHC - 360 
-                if DHH > 180 or DHH < -180:
-                    DHH = DHH - 360 
-                DHHAdd = DHH
-                rudder_angle = self.rudder.compute(DHC, DHH, DHHAdd, RWH)
-                
-                dist_bef_act = distancia_entre_puntos(*posBef, *posAct)
-                
+        # Desired Sail ---------------------------------------------------------------------------------
+        # self.current_sail_pos = read feedback to aplly controller
+        # self.increment = self.sail_controller(self.relative_wind, self.current_sail_pos)
+        new_sail_pos = self.sail_controller(self.relative_wind) # To send for control sail1 = sail2
+        # Adapt output for board
+        sail1_to_send = int(re_locate(new_sail_pos, -180, 180, 0, 180)) # Mini sailboat
+        #to_send = int(re_locate(new_sail_pos, -180, 180, 0, 180)) # Real sailboat
+        
+        # Desired clutch -------------------------------------------------------------------------------
+        if self.clutch == True:
+            clutch_angle = 120
+        else:
+            clutch_angle = 0
+        
+        # Additional control data
+        self.distancia_recorrida = distancia_entre_puntos(*self.past_position, *self.current_position)
+        self.distancia_waypoint = distancia_entre_puntos(*self.current_position, *self.current_waypoint)
 
-                # Send Data
-                control_list = f'{int(90 + AS/2)}/{int(90 + rudder_angle)}//'
-                print(control_list)
-                self.board_port.send_state_variables(control_list)
-                print(f'-> DiRumbo: {distancia_Pn_recta:.2f} || DHin: {DHin:.2f} -> DHOut: {DH:.2f}')
-                print(f'   Sail: {AS:.2f}, Rudder: {rudder_angle:.2f}, ---->>>> RWH: {RWH:.2f}/Heading: {H:.2f}')
-                print(f'   PosInit: {P0}, PosBef: {posBef} ------ >>>> DistanciaBefAct{dist_bef_act:4f}')  
-                print(f'   PosAct: {posAct}, PosBef: {posBef} ------ >>>> DistanciaBefAct{dist_bef_act:4f}') 
-                print(f'   DiObj: {distancia_P0_W:.2f}, Waypoint: {waypoint}  ------ >>>> time : {t:4f}')
-                time.sleep(0.1)
-                posBef = posAct
+        #self.current_waypoint reached
+        if self.distancia_waypoint < 5: # Adjust as you need (meters)
+            point_reached = self.waypoints.pop(0)
+            self.pos_partida = self.current_position
+            print('<AUTO> Waypoint:', point_reached, 'REACHED')
+        
+        # Mision Complete
+        if not self.waypoints:
+            self.done = True                
+            print('<AUTO> Mision DONE')
 
+        # Send to board env and xbee ----------------------------------------------------------------------------
+        dt = time.time() - self.start_time
+        if dt > 1: #enviar en lapsos de 1 seg
+            control_trama = f'{sail1_to_send}/{sail1_to_send}/{int(90 + self.rudder_pos)}/{clutch_angle}//'
+            print(f'<AUTO> Control: {control_trama} ---- t:{dt}')
+            self.board_port.send_state_variables(control_trama, console=True)
+            self.start_time = time.time()
+            # Send to xbee
+            state_str = f"CC/{self.desvio:.2f}/{self.desired_heading}/{self.new_desired_heading:.2f}/{self.sail_pos:.2f}/{self.rudder_pos:.2f}/{self.relative_wind:.2f}/{self.heading:.2f}/{self.pos_partida}/{self.current_position}/{self.past_position}/{self.distancia_recorrida:.2f}/{self.distancia_waypoint:.2f}/{self.current_waypoint}/{t:4f}//"
+            self.xbee_port.send_state_variables(state_str)
 
-            # Waypoint reached
-            if distancia_entre_puntos(*posAct, *waypoint) < 6:
-                point_reached = self.waypoints.pop(0)
-                P0 = posAct
-                print('W:', point_reached, 'REACHED')
-            
-            # Mision Complete
-            if not self.waypoints:
-                self.done = True                
-                print('DONE')
+        # Update sail position for servo purposes
+        self.past_position = self.current_position
 
-    def stop(self):
-        self.done = True
+    def heading_controller(self, relative_wind, heading, desvio, desired_heading):
+        WH = heading - relative_wind
+        DRWHin = WH - desired_heading
+        DRWHout = self.desire.compute(relative_wind, DRWHin, desvio)
+        DH = WH + DRWHout
+        
+        return DH
+    
+    def rudder_controller(self,RWH, DH, H, C):
+        DHC = DH - C
+        DHH = DH - H
+        if DHC > 180 or DHC < -180:
+            DHC = DHC - 360 
+        if DHH > 180 or DHH < -180:
+            DHH = DHH - 360 
+        DHHAdd = DHH
+        rudder_angle = self.rudder.compute(DHC, DHH, DHHAdd, RWH)
+        
+        return rudder_angle
+    
+    def sail_controller(self, wind_data): # sail_pos
+        sail_pos = self.sail_pos # Add feedback reading as argument
+        errorSail = wind_data - sail_pos
+        if errorSail > 180:
+            errorSail = errorSail - 360
+        elif errorSail < -180:
+            errorSail = 360 + errorSail
+        self.error_sail = errorSail # send to cluch?
+        increment = self.sail.compute(wind_data, errorSail)
+        # Servo signal adaptation -> return increment instead?
+        new = sail_pos + increment
+        if new > 180:
+            new = new - 360
+        elif new < -180:
+            new = new + 360
+        
+        return new
+    
+   
+def angle_to_north(lat1, lon1, lat2, lon2):
+    # Convertir las coordenadas de grados a radianes
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    # Calcular el ángulo respecto al norte utilizando la función atan2
+    angle_rad = math.atan2(dlon, dlat) 
+    angle_deg = math.degrees(angle_rad)
+
+    return angle_deg
+    
+def distancia_entre_puntos(lat1, lon1, lat2, lon2):
+    # Radio de la Tierra en metros
+    radio_tierra = 6371000.0
+
+    # Convertir las coordenadas a radianes
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+
+    # Diferencia de latitud y longitud
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+
+    # Calcular la distancia usando la fórmula de Haversine
+    a = math.sin(dlat/2) * math.sin(dlat/2) + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2) * math.sin(dlon/2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    distancia = radio_tierra * c
+
+    return distancia
+
+def distancia_a_recta(P0, W, Pn):
+
+    # Calcular las coordenadas del punto proyectado de Pn sobre la línea que pasa por W y P0
+    x0, y0 = P0[1], P0[0]  # Coordenadas P0 (lon, lat)
+    x1, y1 = W[1], W[0]    # Coordenadas W (lon, lat)
+    x2, y2 = Pn[1], Pn[0]  # Coordenadas Pn (lon, lat)
+
+    A = x0 - x1
+    B = y0 - y1
+    C = x2 - x1
+    D = y2 - y1
+
+    dot = A * C + B * D
+    len_sq = C * C + D * D
+    param = dot / len_sq
+
+    if param < 0:
+        x = x1
+        y = y1
+    elif param > 1:
+        x = x2
+        y = y2
+    else:
+        x = x1 + param * C
+        y = y1 + param * D
+
+    # Calcular la distancia entre Pn y el punto proyectado
+    distancia_Pn_recta = distancia_entre_puntos(Pn[0], Pn[1], y, x)
+
+    return distancia_Pn_recta
+
+def re_locate(value, from_low, from_high, to_low, to_high):
+    return (value - from_low) * (to_high - to_low) / (from_high - from_low) + to_low
