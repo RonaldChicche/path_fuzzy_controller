@@ -70,7 +70,7 @@ class StateMachine(threading.Thread):
                 sail2 = control.get('sail2')
                 rudder = control.get('rudder')
                 clutch = control.get('clutch')
-                return {'state': state, 'control': {'sail1': sail1, 'sail2': sail2, 'rudder': rudder, 'clutch':clutch}, 'mision': []}
+                return {'state': state, 'control': {'rudder': rudder, 'sail1': sail1, 'sail2': sail2, 'clutch':clutch}, 'mision': []}
 
             # Si la trama es del tipo "AUTOMATIC"
             elif state == "A":

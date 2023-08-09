@@ -100,7 +100,7 @@ class Automatic():
         # Send to board env and xbee ----------------------------------------------------------------------------
         dt = time.time() - self.start_time
         if dt > 1: #enviar en lapsos de 1 seg
-            control_trama = f'{sail1_to_send}/{sail1_to_send}/{int(90 + self.rudder_pos)}/{clutch_angle}//'
+            control_trama = f'{int(90 + self.rudder_pos)}/{sail1_to_send}/{sail1_to_send}/{clutch_angle}//'
             print(f'<AUTO> Control: {control_trama} ---- t:{dt}')
             self.board_port.send_state_variables(control_trama, console=True)
             self.start_time = time.time()
